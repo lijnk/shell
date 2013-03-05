@@ -1,0 +1,318 @@
+local parent = shell
+
+local exit = false
+
+--make these environment variables (so we can call $PATH, etc)
+local Dir = (parent and parent.dir()) or ""
+local Path = (parent and parent.path()) or ".:/rom/programs"
+local Aliases = (parent and parent.aliases()) or {}
+local stack = {}
+
+local shell = {}
+local env = {
+  ["shell"] = shell,
+}
+
+local prompt, fg, bg
+if term.isColor() then
+  prompt = colors.blue
+  fg = colors.white
+  bg = colors.black
+else
+  prompt = colors.white
+  fg = colors.white
+  bg = colors.black
+end
+
+local function run(command, ...)
+  local path = shell.resolveProgram(command)
+  if path ~= nil then
+    stack[#stack + 1] = path
+    local result = os.run(env, path, ...)
+    stack[#stack] = nil
+    return result
+  else
+    printError(command.. ": command not found")
+    return false
+  end
+end
+
+local function runLine(line)
+  local words = {}
+  for m in string.gmatch(line, "[^ \t]+") do
+    table.insert(words, m)
+  end
+  local command = words[1]
+  if command then
+    return run(command, unpack(words, 2))
+  end
+  return false
+end
+
+--API
+function shell.run(...)
+  return runLine(table.concat({...}, " "))
+end
+
+function shell.exit()
+  exit = true
+end
+
+function shell.dir()
+  return Dir
+end
+
+function shell.setDir(d)
+  Dir = d
+end
+
+function shell.path()
+  return Path
+end
+
+function shell.setPath(p)
+  Path = p
+end
+
+function shell.resolve(p)
+  local start = string.sub(p, 1, 1)
+  if start == "/" then
+    return fs.combine("", p)
+  else
+    return fs.combine(Dir, p)
+  end
+end
+
+function shell.resolveProgram(command)
+  if Aliases[command] ~= nil then
+    command = Aliases[command]
+  end
+
+  local start = string.sub(command, 1, 1)
+  if start == "/" then
+    local path = fs.combine("", command)
+    if fs.exists(path) and not fs.isDir(path) then
+      return path
+    end
+    return nil
+  end
+
+  for Path in string.gmatch(Path, "[^:]+") do
+    Path = fs.combine(shell.resolve(Path), command)
+    if fs.exists(Path) and not fs.isDir(Path) then
+      return Path
+    end
+  end
+  return nil
+end
+
+function shell.programs(h)
+  local items = {}
+  for Path in string.gmatch(Path, "[^:]+") do
+    Path = shell.resolve(Path)
+    if fs.isDir(Path) then
+      local tmp = fs.list(Path)
+      for k, v in pairs(tmp) do
+        if not fs.isDir(fs.combine(Path, v)) and (h or string.sub(v, 1, 1) ~= ".") then
+	  items[v] = true
+	end
+      end
+    end
+  end
+
+  local result = {}
+  for k, v in pairs(items) do
+    table.insert(result, k)
+  end
+  table.sort(result)
+  return result
+end
+
+function shell.getRunningProgram()
+  if #stack > 0 then
+    return stack[#stack]
+  end
+  return nil
+end
+
+function shell.setAlias(command, prog)
+  Aliases[command] = prog
+end
+
+function shell.clearAlias(command)
+  Aliases[command] = nil
+end
+
+function shell.aliases()
+  local result = {}
+  for k, v in pairs(Aliases) do
+    result[k] = v
+  end
+  return result
+end
+
+local function tabComplete(line)
+  local count = 0
+  local items = {}
+  local ws = string.find(line, " +") --find whitespace for arguments
+  --populate the list of items
+  --arguments
+  if ws then
+    local com = string.sub(line, 1, ws) --command
+    local arg = string.sub(line, ws+1) --arg
+    local p = "" --path to search
+    local s = string.match(arg, "[^/]+$") --search string
+    if not string.match(arg, "^%./") then --add ./ prefix if needed
+      p = "./"
+    end
+    if string.find(arg, "/") then
+      if fs.isDir(p..arg) then
+        p = p .. arg
+      else
+	p = p .. string.match(arg, ".+/")
+      end
+    end
+    for i,v in ipairs(fs.list(p)) do
+      if s == nil or string.match(v, "^"..s) then
+        count = count + 1
+	--small hack to distinguish directories and files for sorting
+	if fs.isDir(p..v) then
+	  items[count] = "d"..com..p..v.."/"
+	else
+	  items[count] = "f"..com..p..v
+	end
+      end
+    end
+  else
+    --programs
+    for Path in string.gmatch(Path, "[^:]+") do
+      local last = string.sub(Path, string.len(Path))
+      for i,v in ipairs(fs.list(Path)) do
+        if string.match(v, "^"..line) and not fs.isDir(Path..v) then
+	  count = count + 1
+	  items[count] = v
+	end
+      end
+    end
+    --aliases
+    for k,v in pairs(Aliases) do
+      if string.match(k, "^"..line) then
+        count = count + 1
+	items[count] = k
+      end
+    end
+  end
+  --sort
+  table.sort(items)
+  if ws then
+    for i,v in ipairs(items) do
+      v = string.sub(v, 2, string.len(v))
+    end
+  end
+
+  return items
+end
+
+term.setBackgroundColor(bg)
+term.setTextColor(colors.lime)
+print(os.version())
+term.setTextColor(fg)
+
+if parent == nil then
+  local rom = shell.resolveProgram("/rom/startup")
+  if rom then
+    shell.run(rom)
+  end
+  local user = shell.resolveProgram("/startup")
+  for k, v in pairs(redstone.getSides()) do
+    if disk.isPresent(v) and disk.hasData(v) then
+      local disk = shell.resolveProgram(fs.combine(disk.getMountPath(v), "startup"))
+      if disk then
+        user = disk
+        break
+      end
+    end
+  end
+
+  if user then
+    shell.run(user)
+  end
+end
+
+local args = {...}
+if #args > 0 then
+  shell.run(...)
+end
+
+--Todo: clean tab-complete up
+
+local hist = {}
+local line = ""
+local tc = false --whether tab-complete is enabled (disables on certain cases)
+local nl = true --whether we get a new prompt string
+while not exit do
+  term.setBackgroundColor(bg)
+  term.setTextColor(prompt)
+  if nl then
+    write("/"..shell.dir() .. " $ ")
+  end
+  term.setTextColor(fg)
+
+  if line == "" then
+    line = read(nil, hist)
+  else
+    line = read(nil, hist, line)
+  end
+
+  if string.match(line, "\t$") ~= nil then
+    line = string.sub(line, 1, string.find(line, "\t")-1) --strip the \t
+    local items = tabComplete(line)
+    local ws = string.find(line, " +")
+    --multiple items
+    if #items > 1 then
+      if not tc then
+	tc = true
+	nl = false
+      else
+	nl = true
+	print()
+	for i,v in ipairs(items) do
+	  if ws then
+	    local t = string.find(items[i], " +")
+	    print(string.sub(items[i], t+1))
+	  else
+	    print(items[i])
+	  end
+	end
+      end
+    --single items
+    elseif #items == 1 then
+      if tc then
+        tc = false
+      end
+      if ws then
+        line = string.sub(items[1], 2, string.len(items[1]))
+      else
+        line = items[1] .. " "
+      end
+      nl = false
+    --0 items
+    else
+      nl = false
+    end
+  else
+    table.insert(hist, line)
+    runLine(line)
+    line = ""
+    tc = false
+    nl = true
+  end
+end
+
+if parent == nil then
+  if shell.resolveProgram("shutdown") then
+    shell.run("shutdown")
+  end
+  os.shutdown()
+end
+
