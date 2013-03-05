@@ -218,14 +218,18 @@ term.setTextColor(colors.lime)
 print(os.version())
 term.setTextColor(fg)
 
+--run startup files
 if parent == nil then
+  --rom
   local rom = shell.resolveProgram("/rom/startup")
   if rom then
     shell.run(rom)
   end
+  --user
   local user = shell.resolveProgram("/startup")
   for k, v in pairs(redstone.getSides()) do
     if disk.isPresent(v) and disk.hasData(v) then
+      --replace with disk if present
       local disk = shell.resolveProgram(fs.combine(disk.getMountPath(v), "startup"))
       if disk then
         user = disk
@@ -250,11 +254,22 @@ local hist = {}
 local line = ""
 local tc = false --whether tab-complete is enabled (disables on certain cases)
 local nl = true --whether we get a new prompt string
+local host = os.getComputerLabel() --env variable in the future. maybe make so you can "hotswap" host labels?
+local user = "user" --stuff planned for this in the future
+
+if host == nil then
+  if turtle then
+    host = "turtle"..os.getComputerID() --default to ID
+  else
+    host = "computer"..os.getComputerID()
+  end
+end
+
 while not exit do
   term.setBackgroundColor(bg)
   term.setTextColor(prompt)
   if nl then
-    write("/"..shell.dir() .. " $ ")
+    write(user.."@"..host.." /"..shell.dir() .. " $ ")
   end
   term.setTextColor(fg)
 
