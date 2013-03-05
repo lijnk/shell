@@ -214,9 +214,12 @@ local function tabComplete(line)
 end
 
 term.setBackgroundColor(bg)
-term.setTextColor(colors.lime)
+if term.isColor() then
+  term.setTextColor(colors.lime)
+else
+  term.setTextColor(fg)
+end
 print(os.version())
-term.setTextColor(fg)
 
 --run startup files
 if parent == nil then
