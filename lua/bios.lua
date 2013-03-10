@@ -231,7 +231,7 @@ end
 
 loadfile = function(file)
   local f = fs.open(file, "r")
-  if file then
+  if f then
     local fn, err = loadstring(f.readAll(), fs.getName(file))
     f.close()
     return fn, err

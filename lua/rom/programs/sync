@@ -1,0 +1,187 @@
+local function recDir(path)
+  if not fs.exists(path) then
+    print("Error: "..path.." No such file or directory")
+  end
+  table.insert(items, "d:"..path)
+  local list = fs.list(path)
+  for i,v in ipairs(list) do
+    local f = shell.resolve(path.."/"..v)
+    if fs.isDir(f) then
+      --print(f.."/")
+      recDir(f)
+    else
+      --print(f)
+      table.insert(items, "f:"..f)
+    end
+  end
+end
+
+local function upload(freqS, freqR, user)
+  local modem = peripheral.wrap("right")
+  if #items == 0 then
+    modem.transmit(freqS, freqR, "EOT") -- don't send anything
+    print("Error: Unable to send")
+    return false
+  end
+  print("Sending "..#items.." file(s) to "..user)
+  local file
+  local e, p1, p2, p3, p4, p5
+  for i,v in ipairs(items) do
+    local name = string.sub(v, 3)
+    file = fs.open(name, "r")
+    if file then
+      message = file.readAll()
+      modem.transmit(freqS, freqR, v)
+      e, p1, p2, p3, p4, p5 = listen(freqR, TO) --file name + type (dir/file)
+      if p4 ~= "true" then
+        print("Error sending: "..v)
+      else
+        if string.match(v, "^f") then
+          modem.transmit(freqS, freqR, message)
+          e, p1, p2, p3, p4, p5 = listen(freqR, TO) --file contents
+          if not p4 == "true" then
+            print("Error sending: "..v)
+          end
+        end
+      end
+      file.close()
+    elseif string.match(v, "^d") then
+      modem.transmit(freqS, freqR, v)
+      e, p1, p2, p3, p4, p5 = listen(freqR, TO)
+      if not p4 == "true" then
+        print("Error sending: "..v)
+      end
+    else
+      print("Error opening: "..v)
+    end
+  end
+  modem.transmit(freqS, freqR, "EOT") -- send EOT signal
+end
+
+local function send(freqS, freqR)
+  local modem = peripheral.wrap("right")
+  local e, p1, p2, p3, p4, p5
+  local user = ""
+  while true do
+    e, p1, p2, p3, p4, p5 = listen(freqR)
+    if string.match(p4, "^GET") then
+      local t = string.find(p4, " +")
+      if t == nil then
+        user = "(unknown)"
+      else
+        user = "'"..string.sub(p4, t+1).."'"
+      end
+      upload(freqS, freqR, user)
+    end
+  end
+
+  return true
+end
+
+local function download(freqS, freqR)
+  local modem = peripheral.wrap("right")
+  local e, p1, p2, p3, p4, p5
+  local file
+  while true do
+    e, p1, p2, p3, p4, p5 = listen(freqR, TO)
+    if not e then
+      print("Error: Timeout on file")
+    else
+      if string.match(p4, "^EOT") then
+        break
+      end
+      local it = string.find(p4, ":")
+      local name = string.sub(p4, it+1)
+      if string.match(p4, "^d") then
+        fs.makeDir(name)
+        modem.transmit(freqS, freqR, "true")
+      elseif string.match(p4, "^f") then
+        file = fs.open(name, "w")
+	if file then
+          modem.transmit(freqS, freqR, "true")
+          e, p1, p2, p3, p4, p5 = listen(freqR, TO)
+          if not e then
+            print("Error: Timeout on file")
+	  else
+	    file.write(p4)
+	    file.close()
+	    modem.transmit(freqS, freqR, "true")
+	    print("Received: "..name)
+	  end
+        else
+	  print("Error opening: "..name)
+	end
+      end
+    end
+  end
+end
+
+local function get(freqS, freqR)
+  local modem = peripheral.wrap("right")
+  modem.transmit(freqS, freqR, "GET "..ID)
+  download(freqS, freqR)
+  return true
+end
+
+local function listen(freq, t)
+  t = t or 0
+  local modem = peripheral.wrap("right")
+  local result = {}
+  modem.open(freq)
+
+  local function rc()
+    local e, p1, p2, p3, p4, p5 = os.pullEvent("modem_message")
+    result = {e, p1, p2, p3, p4, p5}
+    return true
+  end
+  local function timeout()
+    sleep(t)
+    return false
+  end
+  if t == 0 then
+    rc() -- infinite timeout
+  else
+    if parallel.waitForAny(timeout, rc) == 1 then
+      modem.close(freq)
+      return false
+    end
+  end
+  modem.close(freq)
+  return unpack(result)
+end
+
+local function main()
+  if args[1] == "get" then
+    get(2501, 2500)
+  elseif args[1] == "send" then
+    print("Starting syncserv")
+    for i,v in ipairs(args) do
+      if i ~= 1 then
+        recDir(v)
+      end
+    end
+    send(2500, 2501)
+  end
+end
+
+local function debugItems()
+  for k,v in pairs(items) do
+    print(k..": "..v)
+  end
+end
+
+items = {}
+ID = ""
+TO = 5
+if os.getComputerLabel() == nil then
+  if turtle then
+    ID = "Turtle"..os.getComputerID()
+  else
+    ID = "Computer"..os.getComputerID()
+  end
+else
+  ID = os.getComputerLabel()
+end
+
+local args = {...}
+main()
