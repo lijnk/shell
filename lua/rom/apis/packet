@@ -1,0 +1,56 @@
+function send(dest, typ, data, channel)
+  if typ < 0 or typ > 127 then
+    error("packet type must be between 0-127")
+  end
+  channel = channel or 65535
+  local modem = peripheral.wrap("right")
+  local packet = cHeader(typ, dest, host.getID()) .. data --maybe we'll use data length in the future, but not now
+  modem.transmit(channel, channel, packet)
+end
+
+function receive(channel)
+  local p = capture(channel)
+  while p.header.destination ~= host.getID() do
+    p = capture(channel)
+  end
+  return p
+end
+
+function capture(channel)
+  channel = channel or 65535
+  local modem = peripheral.wrap("right")
+  modem.open(channel)
+  local e, side, sch, rch, msg, dis = os.pullEvent("modem_message")
+  local result = {}
+  result["header"] = dHeader(msg)
+  result["data"] = string.sub(msg, result.header.length+1) --data is anything after the header
+  modem.close(channel)
+  return result
+end
+
+function cHeader(typ, dest, source) --converts header table to header string
+  local result = ""
+  local dlength = string.len(dest) --destination length
+  local slength = string.len(source) --source length
+  local hlength = 4 + dlength + slength --header length
+  return string.char(hlength) .. string.char(typ) .. string.char(dlength) .. dest .. string.char(slength) .. source
+end
+
+function dHeader(header) --deconverts header string to header table
+  local result = {}
+  local dlength = string.byte(header, 3)
+  local slength = string.byte(header, 4 + dlength)
+  result["length"] = string.byte(header, 1) --header length
+  result["type"] = string.byte(header, 2) --header type
+  result["destination"] = string.sub(header, 4, dlength+3) --destination
+  result["source"] = string.sub(header, 5+dlength, result.length) --source
+  return result
+end
+
+function debug(p)
+  print("Header length: "..p.header.length)
+  print("Type: "..p.header["type"])
+  print("Destination: "..p.header.destination)
+  print("Source: "..p.header.source)
+  print("Data: "..p.data)
+end

@@ -6,4 +6,4 @@ Sync command:
 Usage: sync [get] [send &lt;path&gt;]
 
 get: will download the files from whatever terminal is at send  
-send &lt;path&gt;: waits for a get request. If a folder is specified, then it'll recursively grab all contents within it. Multiple paths can be specified and are separated by a space
+send &lt;path&gt;: waits for a get request. If a folder is specified, then it'll recursively grab all contents within it. Multiple paths can be specified and are separated by a space. Sending computer must be named host in order for computers using "get" to listen.

@@ -1,4 +1,7 @@
-local function recDir(path)
+args = {...}
+items = {}
+
+function recDir(path)
   if not fs.exists(path) then
     print("Error: "..path.." No such file or directory")
   end
@@ -7,181 +10,106 @@ local function recDir(path)
   for i,v in ipairs(list) do
     local f = shell.resolve(path.."/"..v)
     if fs.isDir(f) then
-      --print(f.."/")
       recDir(f)
     else
-      --print(f)
       table.insert(items, "f:"..f)
     end
   end
 end
 
-local function upload(freqS, freqR, user)
-  local modem = peripheral.wrap("right")
-  if #items == 0 then
-    modem.transmit(freqS, freqR, "EOT") -- don't send anything
-    print("Error: Unable to send")
-    return false
-  end
-  print("Sending "..#items.." file(s) to "..user)
-  local file
-  local e, p1, p2, p3, p4, p5
-  for i,v in ipairs(items) do
-    local name = string.sub(v, 3)
-    file = fs.open(name, "r")
-    if file then
-      message = file.readAll()
-      modem.transmit(freqS, freqR, v)
-      e, p1, p2, p3, p4, p5 = listen(freqR, TO) --file name + type (dir/file)
-      if p4 ~= "true" then
-        print("Error sending: "..v)
-      else
-        if string.match(v, "^f") then
-          modem.transmit(freqS, freqR, message)
-          e, p1, p2, p3, p4, p5 = listen(freqR, TO) --file contents
-          if not p4 == "true" then
-            print("Error sending: "..v)
-          end
-        end
-      end
-      file.close()
-    elseif string.match(v, "^d") then
-      modem.transmit(freqS, freqR, v)
-      e, p1, p2, p3, p4, p5 = listen(freqR, TO)
-      if not p4 == "true" then
-        print("Error sending: "..v)
-      end
-    else
-      print("Error opening: "..v)
+function serv()
+  for i,v in ipairs(args) do
+    if i ~= 1 then
+      recDir(v)
     end
   end
-  modem.transmit(freqS, freqR, "EOT") -- send EOT signal
-end
+  table.sort(items)
 
-local function send(freqS, freqR)
-  local modem = peripheral.wrap("right")
-  local e, p1, p2, p3, p4, p5
-  local user = ""
   while true do
-    e, p1, p2, p3, p4, p5 = listen(freqR)
-    if string.match(p4, "^GET") then
-      local t = string.find(p4, " +")
-      if t == nil then
-        user = "(unknown)"
-      else
-        user = "'"..string.sub(p4, t+1).."'"
-      end
-      upload(freqS, freqR, user)
-    end
-  end
-
-  return true
-end
-
-local function download(freqS, freqR)
-  local modem = peripheral.wrap("right")
-  local e, p1, p2, p3, p4, p5
-  local file
-  while true do
-    e, p1, p2, p3, p4, p5 = listen(freqR, TO)
-    if not e then
-      print("Error: Timeout on file")
-    else
-      if string.match(p4, "^EOT") then
-        break
-      end
-      local it = string.find(p4, ":")
-      local name = string.sub(p4, it+1)
-      if string.match(p4, "^d") then
-        fs.makeDir(name)
-        modem.transmit(freqS, freqR, "true")
-      elseif string.match(p4, "^f") then
-        file = fs.open(name, "w")
-	if file then
-          modem.transmit(freqS, freqR, "true")
-          e, p1, p2, p3, p4, p5 = listen(freqR, TO)
-          if not e then
-            print("Error: Timeout on file")
-	  else
-	    file.write(p4)
-	    file.close()
-	    modem.transmit(freqS, freqR, "true")
-	    print("Received: "..name)
-	  end
-        else
-	  print("Error opening: "..name)
+    p = packet.receive(2500)
+    if p.header["type"] == 1 then
+      print("Request from: "..p.header.source)
+      for i,v in ipairs(items) do
+        local fn = string.sub(v, 3)
+        if string.match(v, "^d") then
+	  sendDir(p.header.source, fn)
+	elseif string.match(v, "^f") then
+          sendFile(p.header.source, fn)
 	end
       end
+      packet.send(p.header.source, 0, "EOT", 2500)
     end
   end
 end
 
-local function get(freqS, freqR)
-  local modem = peripheral.wrap("right")
-  modem.transmit(freqS, freqR, "GET "..ID)
-  download(freqS, freqR)
-  return true
+function sendDir(dest, name)
+  packet.send(dest, 3, name, 2500)
+  local p = packet.receive(2500)
+  while dest ~= p.header.source or p.header["type"] ~= 4 do
+    p = packet.receive(2500)
+  end
 end
 
-local function listen(freq, t)
-  t = t or 0
-  local modem = peripheral.wrap("right")
-  local result = {}
-  modem.open(freq)
+function sendFile(dest, name)
+  local file = fs.open(name, "r")
+  local data = file.readAll()
+  file.close()
 
-  local function rc()
-    local e, p1, p2, p3, p4, p5 = os.pullEvent("modem_message")
-    result = {e, p1, p2, p3, p4, p5}
+  packet.send(dest, 2, name, 2500)
+  local p2 = packet.receive(2500)
+  while dest ~= p2.header.source or p2.header["type"] ~= 4 do
+    p2 = packet.receive(2500)
+  end
+  packet.send(dest, 2, data, 2500)
+end
+
+function receive(src)
+  p1 = packet.receive(2500)
+  if p1.header["type"] == 0 then
     return true
+  elseif p1.header["type"] == 2 then
+    packet.send(src, 4, "ready", 2500)
+    p2 = packet.receive(2500)
+    local file = fs.open(p1.data, "w")
+    file.write(p2.data)
+    file.close()
+  elseif p1.header["type"] == 3 then
+    fs.makeDir(p1.data)
+    packet.send(src, 4, "ready", 2500)
   end
-  local function timeout()
-    sleep(t)
-    return false
-  end
-  if t == 0 then
-    rc() -- infinite timeout
-  else
-    if parallel.waitForAny(timeout, rc) == 1 then
-      modem.close(freq)
-      return false
-    end
-  end
-  modem.close(freq)
-  return unpack(result)
+  return false
 end
 
-local function main()
-  if args[1] == "get" then
-    get(2501, 2500)
-  elseif args[1] == "send" then
-    print("Starting syncserv")
-    for i,v in ipairs(args) do
-      if i ~= 1 then
-        recDir(v)
-      end
-    end
-    send(2500, 2501)
+function capture()
+  while true do
+    local p = packet.capture(2500)
+    packet.debug(p)
+    print()
   end
 end
 
-local function debugItems()
-  for k,v in pairs(items) do
-    print(k..": "..v)
+function client()
+  packet.send("host", 1, "request", 2500)
+  local t = false
+  while not t do
+    t = receive("host")
   end
 end
 
-items = {}
-ID = ""
-TO = 5
-if os.getComputerLabel() == nil then
-  if turtle then
-    ID = "Turtle"..os.getComputerID()
-  else
-    ID = "Computer"..os.getComputerID()
+--0 EOT
+--1 request
+--2 sendFile
+--3 sendDir
+--4 ready
+
+function main()
+  if args[1] == "send" then
+    serv()
+  elseif args[1] == "get" then
+    client()
+  elseif args[1] == "capture" then
+    capture()
   end
-else
-  ID = os.getComputerLabel()
 end
 
-local args = {...}
 main()
