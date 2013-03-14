@@ -1,16 +1,13 @@
 function send(dest, typ, data, channel)
-  if typ < 0 or typ > 127 then
-    error("packet type must be between 0-127")
-  end
   channel = channel or 65535
   local modem = peripheral.wrap("right")
-  local packet = cHeader(typ, dest, host.getID()) .. data --maybe we'll use data length in the future, but not now
+  local packet = cHeader(typ, dest, os.getComputerID()) .. data --maybe we'll use data length in the future, but not now
   modem.transmit(channel, channel, packet)
 end
 
 function receive(channel)
   local p = capture(channel)
-  while p.header.destination ~= host.getID() do
+  while p.header.destination ~= os.getComputerID() do
     p = capture(channel)
   end
   return p
@@ -30,20 +27,22 @@ end
 
 function cHeader(typ, dest, source) --converts header table to header string
   local result = ""
-  local dlength = string.len(dest) --destination length
-  local slength = string.len(source) --source length
-  local hlength = 4 + dlength + slength --header length
-  return string.char(hlength) .. string.char(typ) .. string.char(dlength) .. dest .. string.char(slength) .. source
+  local dlength = string.len(tostring(dest)) --destination length
+  local slength = string.len(tostring(source)) --source length
+  local hlength = 5 + dlength + slength --header length
+  return string.char(hlength) .. string.char(math.floor(typ/16)) .. string.char(typ%16) .. string.char(dlength) .. dest .. string.char(slength) .. source
 end
 
 function dHeader(header) --deconverts header string to header table
   local result = {}
-  local dlength = string.byte(header, 3)
-  local slength = string.byte(header, 4 + dlength)
+  local dlength = string.byte(header, 4)
+  local slength = string.byte(header, 5 + dlength)
   result["length"] = string.byte(header, 1) --header length
-  result["type"] = string.byte(header, 2) --header type
-  result["destination"] = string.sub(header, 4, dlength+3) --destination
-  result["source"] = string.sub(header, 5+dlength, result.length) --source
+  result["type"] = (string.byte(header, 2)*16) + string.byte(header, 3) --header type
+  result["subtype1"] = string.byte(header, 2)
+  result["subtype2"] = string.byte(header, 3)
+  result["destination"] = tonumber(string.sub(header, 5, dlength+4)) --destination
+  result["source"] = tonumber(string.sub(header, 6+dlength, result.length)) --source
   return result
 end
 

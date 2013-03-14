@@ -26,9 +26,10 @@ function serv()
   table.sort(items)
 
   while true do
-    p = packet.receive(2500)
-    if p.header["type"] == 1 then
+    p = recvSync()
+    if p.data["type"] == 0 then
       print("Request from: "..p.header.source)
+      sendSync(p.header.source, 1) --may do something such as deny requests, etc
       for i,v in ipairs(items) do
         local fn = string.sub(v, 3)
         if string.match(v, "^d") then
@@ -37,16 +38,16 @@ function serv()
           sendFile(p.header.source, fn)
 	end
       end
-      packet.send(p.header.source, 0, "EOT", 2500)
+      sendSync(p.header.source, 15)
     end
   end
 end
 
 function sendDir(dest, name)
-  packet.send(dest, 3, name, 2500)
-  local p = packet.receive(2500)
-  while dest ~= p.header.source or p.header["type"] ~= 4 do
-    p = packet.receive(2500)
+  sendSync(dest, 3, name)
+  local p = recvSync()
+  while dest ~= p.header.source or p.data["type"] ~= 4 do
+    p = recvSync() --wait for ack
   end
 end
 
@@ -55,27 +56,24 @@ function sendFile(dest, name)
   local data = file.readAll()
   file.close()
 
-  packet.send(dest, 2, name, 2500)
-  local p2 = packet.receive(2500)
-  while dest ~= p2.header.source or p2.header["type"] ~= 4 do
-    p2 = packet.receive(2500)
+  sendSync(dest, 2, name..string.char(0)..data)
+  local p = recvSync()
+  while dest ~= p.header.source or p.data["type"] ~= 4 do
+    p = recvSync()
   end
-  packet.send(dest, 2, data, 2500)
 end
 
 function receive(src)
-  p1 = packet.receive(2500)
-  if p1.header["type"] == 0 then
+  local p = recvSync()
+  sendSync(src, 4)
+  if p.data["type"] == 15 then --EOT
     return true
-  elseif p1.header["type"] == 2 then
-    packet.send(src, 4, "ready", 2500)
-    p2 = packet.receive(2500)
-    local file = fs.open(p1.data, "w")
-    file.write(p2.data)
+  elseif p.data["type"] == 2 then --file
+    local file = fs.open(p.data.name, "w")
+    file.write(p.data.data)
     file.close()
-  elseif p1.header["type"] == 3 then
-    fs.makeDir(p1.data)
-    packet.send(src, 4, "ready", 2500)
+  elseif p.data["type"] == 3 then --directory
+    fs.makeDir(p.data.data)
   end
   return false
 end
@@ -83,17 +81,53 @@ end
 function capture()
   while true do
     local p = packet.capture(2500)
-    packet.debug(p)
-    print()
+    local file = fs.open("packet.dump", "a")
+    file.write(p.header.source.." -> "..p.header.destination)
+    file.write("\tT: "..p.header["type"].." D: "..p.data)
+    file.write("\n")
+    file.close()
   end
 end
 
 function client()
-  packet.send("host", 1, "request", 2500)
+  sendSync(0, 0)
   local t = false
   while not t do
-    t = receive("host")
+    t = receive(0)
   end
+end
+
+function cSyncHeader(typ, data)
+  --convert sync header table to string
+  --header length, type, data
+  local result = ""
+  result = result .. string.char(typ) .. data
+  return result
+end
+
+function dSyncHeader(data)
+  --deconvert sync header string to table
+  local result = {}
+  result["type"] = string.byte(data, 1)
+  if result["type"] == 2 then
+    local it = string.find(data, string.char(0))
+    result["name"] = string.sub(data, 2, it)
+    result["data"] = string.sub(data, it+1)
+  else
+    result["data"] = string.sub(data, 2)
+  end
+  return result
+end
+
+function sendSync(dest, typ, data)
+  data = data or ""
+  packet.send(dest, 32, cSyncHeader(typ, data), 2500)
+end
+
+function recvSync()
+  local p = packet.receive(2500)
+  p.data = dSyncHeader(p.data)
+  return p
 end
 
 --0 EOT
@@ -101,6 +135,13 @@ end
 --2 sendFile
 --3 sendDir
 --4 ready
+
+--0 Req
+--1 Resp
+--2 file
+--3 directory
+--4 ack
+--15 EOT
 
 function main()
   if args[1] == "send" then
