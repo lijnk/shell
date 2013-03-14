@@ -126,15 +126,9 @@ end
 
 function recvSync()
   local p = packet.receive(2500)
-  p.data = dSyncHeader(p.data)
+  p.data = dSyncHeader(p.data.."") --concat is here because string.sub() is stupid
   return p
 end
-
---0 EOT
---1 request
---2 sendFile
---3 sendDir
---4 ready
 
 --0 Req
 --1 Resp
